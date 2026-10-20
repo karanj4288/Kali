@@ -1,0 +1,160 @@
+name: 🐉 Kali Linux RDP (Full XFCE GUI + Big Disk via Tailscale)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tailscale_key:
+        description: 'Enter your Tailscale Auth Key (tskey-auth-...)'
+        required: true
+        default: ''
+      kali_password:
+        description: 'Choose a password for the kali user'
+        required: true
+        default: ''
+      tools_set:
+        description: 'Kali tools package (kali-tools-top10 / kali-linux-default / kali-linux-headless)'
+        required: true
+        default: 'kali-tools-top10'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: 🧹 Free Up Disk Space (removes unused runner software)
+      run: |
+        echo "Before:"; df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                    /usr/share/swift /usr/local/.ghcup /opt/microsoft \
+                    /usr/local/share/powershell /usr/local/julia* || true
+        sudo apt-get clean
+        docker system prune -af || true
+        echo "After:"; df -h /
+
+    - name: 💾 Add 8GB Swap + Tune Memory
+      run: |
+        sudo swapoff -a || true
+        sudo fallocate -l 8G /mnt/swapfile
+        sudo chmod 600 /mnt/swapfile
+        sudo mkswap /mnt/swapfile
+        sudo swapon /mnt/swapfile
+        sudo sysctl vm.swappiness=20
+        free -h
+
+    - name: ⬇️ Install & Connect Tailscale
+      env:
+        TS_KEY: ${{ github.event.inputs.tailscale_key }}
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        sudo tailscale up --authkey="$TS_KEY" --hostname=kali-rdp --accept-routes
+        sleep 3
+        echo "TS_IP=$(tailscale ip -4)" >> $GITHUB_ENV
+
+    - name: 🐉 Start Kali Container (4GB shared memory, host-mounted workspace)
+      run: |
+        mkdir -p /mnt/kali-data
+        docker pull kalilinux/kali-rolling
+        docker run -d --name kali \
+          --shm-size=4g \
+          --security-opt seccomp=unconfined \
+          -p 3389:3389 \
+          -v /mnt/kali-data:/home/kali/data \
+          kalilinux/kali-rolling sleep infinity
+
+    - name: 🖥️ Install Full XFCE GUI + xrdp + Kali Tools
+      env:
+        KALI_PASS: ${{ github.event.inputs.kali_password }}
+        TOOLS: ${{ github.event.inputs.tools_set }}
+      run: |
+        docker exec -e DEBIAN_FRONTEND=noninteractive -e TOOLS="$TOOLS" kali bash -c '
+          apt-get update &&
+          apt-get install -y \
+            kali-desktop-xfce xorg xorgxrdp xrdp dbus-x11 sudo \
+            firefox-esr xfce4-terminal xfce4-goodies thunar mousepad \
+            fonts-noto fonts-liberation fonts-firacode \
+            network-manager-gnome policykit-1 \
+            curl wget git nano vim net-tools iputils-ping \
+            "$TOOLS"
+        '
+
+    - name: 🎨 Configure GUI, User & xrdp
+      env:
+        KALI_PASS: ${{ github.event.inputs.kali_password }}
+      run: |
+        docker exec -e KALI_PASS="$KALI_PASS" kali bash -c '
+          useradd -m -s /bin/bash -G sudo kali
+          echo "kali:$KALI_PASS" | chpasswd
+          chown -R kali:kali /home/kali
+
+          # Start XFCE on login (fixes black-screen issue)
+          cat > /home/kali/.xsession <<EOF
+        unset DBUS_SESSION_BUS_ADDRESS
+        unset XDG_RUNTIME_DIR
+        xset s off -dpms
+        exec startxfce4
+        EOF
+          chown kali:kali /home/kali/.xsession
+
+          # Disable XFCE compositor (much smoother over RDP)
+          mkdir -p /home/kali/.config/xfce4/xfconf/xfce-perchannel-xml
+          cat > /home/kali/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml <<EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <channel name="xfwm4" version="1.0">
+          <property name="general" type="empty">
+            <property name="use_compositing" type="bool" value="false"/>
+          </property>
+        </channel>
+        EOF
+          chown -R kali:kali /home/kali/.config
+
+          # Remove "Authentication required to create color managed device" popups
+          mkdir -p /etc/polkit-1/localauthority/50-local.d
+          cat > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla <<EOF
+        [Allow Colord all Users]
+        Identity=unix-user:*
+        Action=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile
+        ResultAny=no
+        ResultInactive=no
+        ResultActive=yes
+        EOF
+
+          # xrdp tuning: 32-bit color, fast compression, allow any resolution
+          sed -i "s/^max_bpp=.*/max_bpp=32/" /etc/xrdp/xrdp.ini
+          sed -i "s/^#tcp_send_buffer_bytes=.*/tcp_send_buffer_bytes=4194304/" /etc/xrdp/xrdp.ini || true
+          adduser xrdp ssl-cert || true
+
+          service dbus start
+          service xrdp start
+          service xrdp status
+        '
+
+    - name: 📊 Show Resources
+      run: |
+        df -h / /mnt
+        free -h
+        nproc
+
+    - name: 🎉 Connection Details
+      run: |
+        echo "=================================================================="
+        echo "🐉 YOUR KALI LINUX RDP IS READY!"
+        echo "=================================================================="
+        echo "🖥️  RDP IP Address : $TS_IP  (port 3389)"
+        echo "👤  Username       : kali"
+        echo "🔑  Password       : (the one you entered when starting the workflow)"
+        echo "📁  Persistent-ish folder inside Kali: ~/data  (lives on the big /mnt disk)"
+        echo "⏱️  Duration       : up to 6 hours (GitHub max limit)"
+        echo "=================================================================="
+
+    - name: ⏳ Keep-Alive Runner (Up to 6 Hours Active)
+      run: |
+        total=350
+        for i in $(seq 1 $total); do
+          sleep 60
+          if [ $((i % 10)) -eq 0 ]; then
+            echo "🟢 Kali RDP Active: $i / $total minutes"
+            docker ps --filter name=kali --format '{{.Status}}'
+          fi
+        done
