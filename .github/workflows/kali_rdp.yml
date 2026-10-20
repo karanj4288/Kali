@@ -60,7 +60,7 @@ jobs:
         docker run -d --name kali \
           --shm-size=4g \
           --security-opt seccomp=unconfined \
-          -p 3389:3389 \
+          -p 3389:3389 -p 2222:22 \
           -v /mnt/kali-data:/home/kali/data \
           kalilinux/kali-rolling sleep infinity
 
@@ -76,7 +76,7 @@ jobs:
             firefox-esr xfce4-terminal xfce4-goodies thunar mousepad \
             fonts-noto fonts-liberation fonts-firacode \
             network-manager-applet polkitd pkexec \
-            curl wget git nano vim net-tools iputils-ping \
+            curl wget git nano vim net-tools iputils-ping openssh-server \
             "$TOOLS"
         '
 
@@ -146,6 +146,13 @@ jobs:
           rm -f /var/run/xrdp/*.pid
           /usr/sbin/xrdp-sesman
           /usr/sbin/xrdp
+
+          # SSH server (port 22 in container, 2222 on the runner)
+          mkdir -p /run/sshd
+          echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+          echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+          ssh-keygen -A
+          /usr/sbin/sshd
           sleep 3
           if pgrep -x xrdp > /dev/null; then
             echo "xrdp is running on port 3389"
@@ -171,6 +178,7 @@ jobs:
         echo "🖥️  RDP IP Address : $TS_IP  (port 3389)"
         echo "👤  Username       : kali"
         echo "🔑  Password       : (the one you entered when starting the workflow)"
+        echo "🔐  SSH            : ssh -p 2222 kali@$TS_IP"
         echo "📁  Persistent-ish folder inside Kali: ~/data  (lives on the big /mnt disk)"
         echo "⏱️  Duration       : up to 6 hours (GitHub max limit)"
         echo "=================================================================="
