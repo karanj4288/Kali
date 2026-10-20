@@ -75,7 +75,7 @@ jobs:
             kali-desktop-xfce xorg xorgxrdp xrdp dbus-x11 sudo \
             firefox-esr xfce4-terminal xfce4-goodies thunar mousepad \
             fonts-noto fonts-liberation fonts-firacode \
-            network-manager-gnome policykit-1 \
+            network-manager-applet polkitd pkexec \
             curl wget git nano vim net-tools iputils-ping \
             "$TOOLS"
         '
@@ -111,6 +111,14 @@ jobs:
           chown -R kali:kali /home/kali/.config
 
           # Remove "Authentication required to create color managed device" popups
+          mkdir -p /etc/polkit-1/rules.d
+          cat > /etc/polkit-1/rules.d/45-allow-colord.rules <<EOF
+        polkit.addRule(function(action, subject) {
+          if (action.id.indexOf("org.freedesktop.color-manager.") == 0) {
+            return polkit.Result.YES;
+          }
+        });
+        EOF
           mkdir -p /etc/polkit-1/localauthority/50-local.d
           cat > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla <<EOF
         [Allow Colord all Users]
