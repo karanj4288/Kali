@@ -134,9 +134,27 @@ jobs:
           sed -i "s/^#tcp_send_buffer_bytes=.*/tcp_send_buffer_bytes=4194304/" /etc/xrdp/xrdp.ini || true
           adduser xrdp ssl-cert || true
 
+          # Make sure TLS cert/keys exist (common reason xrdp refuses to start in Docker)
+          apt-get install -y ssl-cert || true
+          make-ssl-cert generate-default-snakeoil --force-overwrite || true
+          adduser xrdp ssl-cert || true
+          [ -f /etc/xrdp/rsakeys.ini ] || xrdp-keygen xrdp auto || true
+
+          # Start services directly (more reliable than init scripts in a container)
           service dbus start
-          service xrdp start
-          service xrdp status
+          mkdir -p /var/run/xrdp
+          rm -f /var/run/xrdp/*.pid
+          /usr/sbin/xrdp-sesman
+          /usr/sbin/xrdp
+          sleep 3
+          if pgrep -x xrdp > /dev/null; then
+            echo "xrdp is running on port 3389"
+          else
+            echo "xrdp failed to start. Logs:"
+            cat /var/log/xrdp.log 2>/dev/null
+            cat /var/log/xrdp-sesman.log 2>/dev/null
+            exit 1
+          fi
         '
 
     - name: 📊 Show Resources
