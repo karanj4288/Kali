@@ -54,7 +54,8 @@ jobs:
 
     - name: 🐉 Start Kali Container (4GB shared memory, host-mounted workspace)
       run: |
-        mkdir -p /mnt/kali-data
+        sudo mkdir -p /mnt/kali-data
+        sudo chmod 777 /mnt/kali-data
         docker pull kalilinux/kali-rolling
         docker run -d --name kali \
           --shm-size=4g \
